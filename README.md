@@ -140,6 +140,17 @@ that's just a guess.
 One last note here: regardless of the IDE used, every submitted project must
 still be compilable with cmake and make./
 
-## How to write a README
-A well written README file can enhance your project and portfolio.  Develop your abilities to create professional README files by completing [this free course](https://www.udacity.com/course/writing-readmes--ud777).
+## Path generation model
+
+The path generation model closely follows one presented in [Project Q&A](https://www.youtube.com/watch?v=7sI3VHFPP0w&feature=emb_logo).
+The paths are generated using [spline C++ library](https://kluge.in-chemnitz.de/opensource/spline/) - a number of (x, y) coordinates
+from the near horizon (90m) are used to interpolate smooth path that follows the road as defined by Frenet coordinates.
+
+A few non-trivial additions to the material presented in the video include a new model of dynamic speed adjusting and lane changing.
+The model uses an observation, that in order to decide on lane change, we only need to keep track of the closest cars behind and
+in front of us in each adjacent lane. The speed of the car is adjusted if we come very close to the car in front of us (at distance of 20m,
+we still go a little bit faster in order to prepare for overtake, but if we are at distance < 5m, our target speed becomes the one
+of the car in front of us). Moreover, in that case, we also look for lane change opportunity. Lane change is executed, if the distance to the
+car behind in the lane we are suppose to enter is > 20m, and the distance to the closest car in front of us in that lane is greater than the
+distance to the car in the current line.
 
