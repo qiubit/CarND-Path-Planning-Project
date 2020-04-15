@@ -199,7 +199,7 @@ int main() {
               double check_speed = sqrt(vx*vx+vy*vy);
               double check_car_s = sensor_fusion[i][5];
 
-              if (check_car_s - car_s < 30 && check_car_s - car_s > 0) {
+              if (check_car_s - car_s < 10 && check_car_s - car_s > 0) {
                 too_close = true;
               }
             }
@@ -209,7 +209,55 @@ int main() {
             cur_v += path_size * delta_t * delta_v;
           } else if (too_close && cur_v > target_v / 2) {
             cur_v -= path_size * delta_t * delta_v;
-            lane = (lane+1)%3;
+
+            int left_lane = lane-1;
+            int right_lane = lane+1;
+            bool lane_changed = false;
+
+            bool too_close = false;
+
+            if (left_lane >= 0) {
+              
+              for (size_t i = 0; i < sensor_fusion.size(); ++i) {
+                float d = sensor_fusion[i][6];
+                if (d < 4*(left_lane+1) && 4*left_lane < d) {
+                  double vx = sensor_fusion[i][3];
+                  double vy = sensor_fusion[i][4];
+                  double check_speed = sqrt(vx*vx+vy*vy);
+                  double check_car_s = sensor_fusion[i][5];
+
+                  if (!(fabs(check_car_s - car_s) > 30)) {
+                    too_close = true;
+                  }
+                }
+              }
+              if (!too_close) {
+                lane = left_lane;
+                lane_changed = true;
+              }
+            }
+
+            too_close = false;
+
+            if (right_lane <= 2 && !lane_changed) {
+              for (size_t i = 0; i < sensor_fusion.size(); ++i) {
+                float d = sensor_fusion[i][6];
+                if (d < 4*(right_lane+1) && 4*right_lane < d) {
+                  double vx = sensor_fusion[i][3];
+                  double vy = sensor_fusion[i][4];
+                  double check_speed = sqrt(vx*vx+vy*vy);
+                  double check_car_s = sensor_fusion[i][5];
+
+                  if (!(fabs(check_car_s - car_s) > 30)) {
+                    too_close = true;
+                  }
+                }
+              }
+              if (!too_close) {
+                lane = right_lane;
+                lane_changed = true;
+              }
+            }
           }
 
           msgJson["next_x"] = next_x_vals;
