@@ -7,6 +7,7 @@
 #include "Eigen-3.3/Eigen/QR"
 #include "helpers.h"
 #include "json.hpp"
+#include "spline.h"
 
 // for convenience
 using nlohmann::json;
@@ -50,8 +51,15 @@ int main() {
     map_waypoints_dy.push_back(d_y);
   }
 
+  double target_v = 22; // in m/s, around 50 mph [speed limit]
+  double delta_t = 0.02;
+  double cur_v = 1;
+  double delta_v = 0.2;
+  int lane = 1;
+
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
-               &map_waypoints_dx,&map_waypoints_dy]
+               &map_waypoints_dx,&map_waypoints_dy,
+               &target_v, &cur_v, &delta_v, &delta_t, &lane]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -98,6 +106,111 @@ int main() {
            *   sequentially every .02 seconds
            */
 
+          size_t path_size = 50;
+          size_t prev_path_size = previous_path_x.size();
+
+          if (prev_path_size > 0) {
+            car_s = end_path_s;
+          }
+
+          // Car's current position will be new origin
+          double ref_x = car_x;
+          double ref_y = car_y;
+          double ref_yaw = deg2rad(car_yaw);
+
+          std::vector<double> ptsx;
+          std::vector<double> ptsy;
+
+          if (prev_path_size < 2) {
+            double prev_x = car_x - cos(ref_yaw);
+            double prev_y = car_y - sin(ref_yaw);
+
+            ptsx.push_back(prev_x);
+            ptsx.push_back(car_x);
+
+            ptsy.push_back(prev_y);
+            ptsy.push_back(car_y);
+          } else {
+            ref_x = previous_path_x[prev_path_size-1];
+            ref_y = previous_path_y[prev_path_size-1];
+
+            ptsx.push_back(previous_path_x[prev_path_size-2]);
+            ptsx.push_back(ref_x);
+
+            ptsy.push_back(previous_path_y[prev_path_size-2]);
+            ptsy.push_back(ref_y);
+
+            ref_yaw = atan2(ptsy[1]-ptsy[0], ptsx[1]-ptsx[0]);
+          }
+
+          vector<double> next_wp1 = getXY(car_s+30, lane*4+2, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          vector<double> next_wp2 = getXY(car_s+60, lane*4+2, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          vector<double> next_wp3 = getXY(car_s+90, lane*4+2, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+
+          ptsx.push_back(next_wp1[0]);
+          ptsx.push_back(next_wp2[0]);
+          ptsx.push_back(next_wp3[0]);
+
+          ptsy.push_back(next_wp1[1]);
+          ptsy.push_back(next_wp2[1]);
+          ptsy.push_back(next_wp3[1]);
+
+          for (size_t i = 0; i < ptsx.size(); ++i) {
+            double shift_x = ptsx[i] - ref_x;
+            double shift_y = ptsy[i] - ref_y;
+
+            ptsx[i] = (shift_x * cos(0-ref_yaw) - shift_y * sin(0-ref_yaw));
+            ptsy[i] = (shift_x * sin(0-ref_yaw) + shift_y * cos(0-ref_yaw));
+          }
+
+          tk::spline s;
+          s.set_points(ptsx, ptsy);
+
+          const double target_x = 30.0;
+          const double target_y = s(target_x);
+          const double target_dist = sqrt(target_x*target_x + target_y*target_y);
+          // how many updates we need until we reach (target_x, target_y)
+          const double target_delta_ts = target_dist / (cur_v * delta_t);
+
+          for (size_t i = 0; i < prev_path_size; ++i) {
+            next_x_vals.push_back(previous_path_x[i]);
+            next_y_vals.push_back(previous_path_y[i]);
+          }
+
+          for (size_t i = 1; i <= path_size - prev_path_size; ++i) {
+            double x_ref = (i / target_delta_ts) * target_x;
+            double y_ref = s(x_ref);
+
+            double x_point = (x_ref*cos(ref_yaw)-y_ref*sin(ref_yaw));
+            double y_point = (x_ref*sin(ref_yaw)+y_ref*cos(ref_yaw));
+
+            next_x_vals.push_back(x_point+ref_x);
+            next_y_vals.push_back(y_point+ref_y);
+          }
+
+          // "dumb" lane changing
+          bool too_close = false;
+
+          for (size_t i = 0; i < sensor_fusion.size(); ++i) {
+            float d = sensor_fusion[i][6];
+            if (d < 4*(lane+1) && 4*lane < d) {
+              double vx = sensor_fusion[i][3];
+              double vy = sensor_fusion[i][4];
+              double check_speed = sqrt(vx*vx+vy*vy);
+              double check_car_s = sensor_fusion[i][5];
+
+              if (check_car_s - car_s < 30 && check_car_s - car_s > 0) {
+                too_close = true;
+              }
+            }
+          }
+
+          if (cur_v < target_v && !too_close) {
+            cur_v += path_size * delta_t * delta_v;
+          } else if (too_close && cur_v > target_v / 2) {
+            cur_v -= path_size * delta_t * delta_v;
+            lane = (lane+1)%3;
+          }
 
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
