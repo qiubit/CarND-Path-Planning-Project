@@ -56,10 +56,12 @@ int main() {
   double cur_v = 1;
   double delta_v = 0.2;
   int lane = 1;
+  bool aggresive_mode = false;
 
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
                &map_waypoints_dx,&map_waypoints_dy,
-               &target_v, &cur_v, &delta_v, &delta_t, &lane]
+               &target_v, &cur_v, &delta_v, &delta_t, &lane,
+               &aggresive_mode]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -188,76 +190,73 @@ int main() {
             next_y_vals.push_back(y_point+ref_y);
           }
 
-          // "dumb" lane changing
-          bool too_close = false;
+          // Initialize distances to large constants
+          vector<double> dist_closest_car_in_front{10000, 10000, 10000};
+          vector<double> dist_closest_car_behind{10000, 10000, 10000};
+          // Initializing velocities to target_v, since it is the speed limit
+          // and all cars in the sim obey it.
+          vector<double> vel_closest_car_in_front{target_v, target_v, target_v};
+          vector<double> vel_closest_car_behind{target_v, target_v, target_v};
 
           for (size_t i = 0; i < sensor_fusion.size(); ++i) {
             float d = sensor_fusion[i][6];
-            if (d < 4*(lane+1) && 4*lane < d) {
+            if (d >= 0) {
+              int cur_lane = floor(d / 4);
+
               double vx = sensor_fusion[i][3];
               double vy = sensor_fusion[i][4];
               double check_speed = sqrt(vx*vx+vy*vy);
               double check_car_s = sensor_fusion[i][5];
+              double dist_car = fabs(check_car_s - car_s);
 
-              if (check_car_s - car_s < 10 && check_car_s - car_s > 0) {
-                too_close = true;
+              if (check_car_s - car_s > 0) { // in front
+                if (dist_closest_car_in_front[cur_lane] > dist_car) {
+                  dist_closest_car_in_front[cur_lane] = dist_car;
+                  vel_closest_car_in_front[cur_lane] = check_speed;
+                }
+              } else { // behind
+                if (dist_closest_car_behind[cur_lane] > dist_car) {
+                  dist_closest_car_behind[cur_lane] = dist_car;
+                  vel_closest_car_behind[cur_lane] = check_speed;
+                }
               }
             }
           }
 
-          if (cur_v < target_v && !too_close) {
+          double temp_target_v = target_v;
+
+          if (dist_closest_car_in_front[lane] < 20) {
+            double vel_closest = vel_closest_car_in_front[lane];
+            temp_target_v = dist_closest_car_in_front[lane] < 5 ?
+              vel_closest - 1 : vel_closest + 4;
+            temp_target_v = temp_target_v < target_v ? temp_target_v : target_v;
+          }
+
+          // We lane change to a lane, for which closest car in front is more distant.
+          // If aggresive_mode is on, we always look for lane change opportunity,
+          // otherwise we only look for the opportunity if the car in front of us is close.
+          if (aggresive_mode || dist_closest_car_in_front[lane] < 20) {
+            int next_lane = lane;
+
+            if (lane-1 >= 0) {
+              if (dist_closest_car_in_front[lane-1] > dist_closest_car_in_front[next_lane] && dist_closest_car_behind[lane-1] > 20) {
+                next_lane = lane-1;
+              }
+            }
+
+            if (lane+1 <= 2) {
+              if (dist_closest_car_in_front[lane+1] > dist_closest_car_in_front[next_lane] && dist_closest_car_behind[lane+1] > 20) {
+                next_lane = lane+1;
+              }
+            }
+
+            lane = next_lane;
+          }
+
+          if (cur_v < temp_target_v) {
             cur_v += path_size * delta_t * delta_v;
-          } else if (too_close && cur_v > target_v / 2) {
+          } else {
             cur_v -= path_size * delta_t * delta_v;
-
-            int left_lane = lane-1;
-            int right_lane = lane+1;
-            bool lane_changed = false;
-
-            bool too_close = false;
-
-            if (left_lane >= 0) {
-              
-              for (size_t i = 0; i < sensor_fusion.size(); ++i) {
-                float d = sensor_fusion[i][6];
-                if (d < 4*(left_lane+1) && 4*left_lane < d) {
-                  double vx = sensor_fusion[i][3];
-                  double vy = sensor_fusion[i][4];
-                  double check_speed = sqrt(vx*vx+vy*vy);
-                  double check_car_s = sensor_fusion[i][5];
-
-                  if (!(fabs(check_car_s - car_s) > 30)) {
-                    too_close = true;
-                  }
-                }
-              }
-              if (!too_close) {
-                lane = left_lane;
-                lane_changed = true;
-              }
-            }
-
-            too_close = false;
-
-            if (right_lane <= 2 && !lane_changed) {
-              for (size_t i = 0; i < sensor_fusion.size(); ++i) {
-                float d = sensor_fusion[i][6];
-                if (d < 4*(right_lane+1) && 4*right_lane < d) {
-                  double vx = sensor_fusion[i][3];
-                  double vy = sensor_fusion[i][4];
-                  double check_speed = sqrt(vx*vx+vy*vy);
-                  double check_car_s = sensor_fusion[i][5];
-
-                  if (!(fabs(check_car_s - car_s) > 30)) {
-                    too_close = true;
-                  }
-                }
-              }
-              if (!too_close) {
-                lane = right_lane;
-                lane_changed = true;
-              }
-            }
           }
 
           msgJson["next_x"] = next_x_vals;
